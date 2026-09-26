@@ -1217,30 +1217,41 @@ def wait_for_login(cdp_port=DEFAULT_CDP_PORT, timeout=DEFAULT_LOGIN_TIMEOUT, int
     try:
         while time.time() <= deadline:
             query, city_code = LOGIN_PROBE_TARGETS[attempt % len(LOGIN_PROBE_TARGETS)]
+            result = None
             try:
                 result = probe_login_state(cdp, sid, query=query, city_code=city_code)
             except RuntimeError as e:
                 print(f"\n❌ {e}")
                 return False
-
-            if result.status is LoginProbeStatus.AVAILABLE:
-                logged_in = True
-                print("\n✅ 已检测到 BOSS 登录态，且接口返回明文薪资")
-                return True
-            if result.status is LoginProbeStatus.RESTRICTED:
-                print(f"\n❌ {describe_login_probe_result(result)}，已停止登录探测")
-                print("   当前问题不是尚未登录；请先在浏览器中完成验证或稍后再试")
-                return False
-            if result.status is LoginProbeStatus.RESPONSE_ERROR:
-                if not result.retryable:
-                    print(f"\n❌ {describe_login_probe_result(result)}，已停止登录探测")
-                    return False
+            except (TimeoutError, websocket.WebSocketException) as e:
+                # 登录页/主页来回跳转或 target 失效时，CDP 命令可能等不到响应；
+                # 按瞬时异常退避重试，不中断登录等待
                 transient_errors += 1
+                log.warning(f"登录探测 CDP 异常（第 {transient_errors} 次，重试）: {e}")
                 if transient_errors > LOGIN_PROBE_MAX_TRANSIENT_ERRORS:
-                    print(f"\n❌ {describe_login_probe_result(result)}，连续异常次数过多")
+                    print(f"\n❌ 登录探测连续异常过多；若 Chrome 页面在登录页/主页间来回跳转，"
+                          "可能是账号在其他浏览器登录互踢，请只保留本端登录后重试")
                     return False
-            else:
-                transient_errors = 0
+
+            if result is not None:
+                if result.status is LoginProbeStatus.AVAILABLE:
+                    logged_in = True
+                    print("\n✅ 已检测到 BOSS 登录态，且接口返回明文薪资")
+                    return True
+                if result.status is LoginProbeStatus.RESTRICTED:
+                    print(f"\n❌ {describe_login_probe_result(result)}，已停止登录探测")
+                    print("   当前问题不是尚未登录；请先在浏览器中完成验证或稍后再试")
+                    return False
+                if result.status is LoginProbeStatus.RESPONSE_ERROR:
+                    if not result.retryable:
+                        print(f"\n❌ {describe_login_probe_result(result)}，已停止登录探测")
+                        return False
+                    transient_errors += 1
+                    if transient_errors > LOGIN_PROBE_MAX_TRANSIENT_ERRORS:
+                        print(f"\n❌ {describe_login_probe_result(result)}，连续异常次数过多")
+                        return False
+                else:
+                    transient_errors = 0
 
             print(".", end="", flush=True)
             remaining = deadline - time.time()
