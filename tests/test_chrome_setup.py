@@ -1039,6 +1039,53 @@ class ChromeSetupTests(unittest.TestCase):
         sleep.assert_called_once()
         self.assertAlmostEqual(sleep.call_args.args[0], 3, delta=0.1)
 
+    def _patch_websocket_exc(self, module):
+        # websocket 是模块内懒加载全局名；mock 掉 CDPSession 后它保持 None，
+        # 需给它一个真实异常类供 except 元组使用
+        fake_ws = mock.Mock()
+        fake_ws.WebSocketException = type("WebSocketException", (Exception,), {})
+        return mock.patch.object(module, "websocket", fake_ws)
+
+    def test_wait_for_login_treats_cdp_timeout_as_transient(self):
+        module = load_module()
+        cdp = mock.Mock()
+        available = module.LoginProbeResult(module.LoginProbeStatus.AVAILABLE)
+        with mock.patch.object(module, "CDPSession", return_value=cdp), \
+                mock.patch.object(
+                    module, "create_page_session",
+                    return_value=("login-target", "login-session"),
+                ), \
+                self._patch_websocket_exc(module), \
+                mock.patch.object(
+                    module, "probe_login_state",
+                    side_effect=[TimeoutError("CDP send(Network.enable) "
+                                              "在 1000 条消息内未找到匹配响应"),
+                                 TimeoutError("CDP send(Network.enable) "
+                                              "在 1000 条消息内未找到匹配响应"),
+                                 available],
+                ) as probe, \
+                mock.patch.object(module.time, "sleep"):
+            # 登录页/主页来回跳转时 CDP 命令可能等不到响应；应退避重试而不是崩溃
+            self.assertTrue(module.wait_for_login(cdp_port=9333, timeout=30, interval=3))
+        self.assertEqual(probe.call_count, 3)
+
+    def test_wait_for_login_stops_after_repeated_cdp_timeouts(self):
+        module = load_module()
+        cdp = mock.Mock()
+        with mock.patch.object(module, "CDPSession", return_value=cdp), \
+                mock.patch.object(
+                    module, "create_page_session",
+                    return_value=("login-target", "login-session"),
+                ), \
+                self._patch_websocket_exc(module), \
+                mock.patch.object(
+                    module, "probe_login_state",
+                    side_effect=TimeoutError("CDP send(Network.enable) 超时"),
+                ), \
+                mock.patch.object(module.time, "sleep"):
+            # 连续瞬时异常超过上限应停止并给出多端互踢提示，而不是拖到总超时
+            self.assertFalse(module.wait_for_login(cdp_port=9333, timeout=30, interval=3))
+
     def test_wait_for_login_stops_immediately_when_restricted(self):
         module = load_module()
         cdp = mock.Mock()

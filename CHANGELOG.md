@@ -17,6 +17,7 @@
 - 城市码表外置为 `data/city_codes.json`（全量 300+ 城市，覆盖一二三四五线），新增 `--list-cities [关键词]` 命令查看支持的城市；`resolve_city` 查询链改为「本地静态码表 → 运行时拉 BOSS 接口 → 9 位裸码兜底」。城市码表打进 wheel，`pip install` 用户也可用。（#24）
 
 ### 修复
+- `--setup-chrome` 登录等待不再因 CDP 瞬时异常崩溃：未登录/扫码期间页面在登录页与主页面来回跳转时，`probe_login_state` 的 `Network.enable` 可能等不到响应抛 `TimeoutError`，此前直接裸 traceback 退出；现在按瞬时错误退避重试（复用 `LOGIN_PROBE_MAX_TRANSIENT_ERRORS` 上限），超限时提示「可能账号在其他浏览器登录互踢，只保留本端登录后重试」
 - Windows 兼容：`main()` 入口将 stdout/stderr 重配为 UTF-8，修复 Windows GBK 控制台遇到 emoji（✅❌⚠️ 等）输出直接 `UnicodeEncodeError` 崩溃的问题（实测此前 73 个单测中 8 个因此失败）
 - JSON 落盘改为原子写入（临时文件 + `os.replace`）：进程中断不再留下半截 JSON 覆盖旧数据；`flush_jobs`、详情页写入与 `--merge` 详情落盘统一走 `_atomic_write_json`
 - `--check` 的 CDP 连通检查不再把任意 CDP 服务误报为「Chrome」，改为输出实际服务标识
